@@ -6,6 +6,7 @@ from dataclasses import dataclass, asdict
 from enum import Enum
 import random
 from datetime import datetime
+import aiohttp
 
 class GameState(Enum):
     WAITING = "waiting"
@@ -53,6 +54,7 @@ class Game:
     current_turn_player_id: Optional[str] = None
     grid_size: int = 6
     card_order: Optional[list] = None
+    character_names: Optional[list] = None  # Store the character names for this game
     tries: int = 0  # Track total tries in the game
 
     def to_dict(self):
@@ -63,6 +65,7 @@ class Game:
             "current_turn_player_id": self.current_turn_player_id,
             "grid_size": self.grid_size,
             "card_order": self.card_order,
+            "character_names": self.character_names,
             "tries": self.tries
         }
 
@@ -79,6 +82,43 @@ class GameServer:
         self.player_to_game: Dict[str, str] = {}  # player_id -> game_id
         self.waiting_players: Set[str] = set()
         self.leaderboard: List[LeaderboardEntry] = []  # In-memory leaderboard
+        self.swapi_characters_cache: List[str] = []  # Cache all SWAPI characters
+
+    async def fetch_all_swapi_characters(self) -> List[str]:
+        """Fetch all Star Wars characters from SWAPI and cache them"""
+        if self.swapi_characters_cache:
+            return self.swapi_characters_cache
+
+        all_characters = []
+        max_pages = 9  # SWAPI has 9 pages of people
+
+        try:
+            async with aiohttp.ClientSession() as session:
+                for page in range(1, max_pages + 1):
+                    async with session.get(f'https://swapi.dev/api/people/?page={page}') as response:
+                        if response.status == 200:
+                            data = await response.json()
+                            all_characters.extend([char['name'] for char in data['results']])
+                        else:
+                            print(f"Failed to fetch SWAPI page {page}")
+                            break
+
+            self.swapi_characters_cache = all_characters
+            print(f"✅ Cached {len(all_characters)} SWAPI characters")
+            return all_characters
+        except Exception as e:
+            print(f"Error fetching SWAPI characters: {e}")
+            return []
+
+    def get_random_characters(self, count: int) -> List[str]:
+        """Get a random selection of characters from the cache"""
+        if not self.swapi_characters_cache:
+            return []
+
+        # Create a copy and shuffle
+        shuffled = self.swapi_characters_cache.copy()
+        random.shuffle(shuffled)
+        return shuffled[:count]
 
     async def handle_client(self, websocket: websockets.WebSocketServerProtocol):
         player_id = None
@@ -142,10 +182,17 @@ class GameServer:
             # Generate the shared card order
             game.generate_card_order()
 
+            # Fetch and assign random Star Wars characters
+            # Calculate how many unique characters we need (half of total cards)
+            num_pairs = (game.grid_size * game.grid_size) // 2
+            all_characters = await self.fetch_all_swapi_characters()
+            random_characters = self.get_random_characters(num_pairs)
+            game.character_names = random_characters
+
             self.player_to_game[player_id] = matching_game_id
             self.waiting_players.discard(list(game.players.keys())[0])
 
-            # Notify both players with the card order
+            # Notify both players with the card order and characters
             await self.broadcast_to_game(matching_game_id, {
                 "type": "game_start",
                 "game": game.to_dict()

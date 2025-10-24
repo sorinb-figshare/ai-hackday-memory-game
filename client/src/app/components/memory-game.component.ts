@@ -417,9 +417,19 @@ export class MemoryGameComponent implements OnInit, OnDestroy {
         this.currentTurnPlayerId = message.game.current_turn_player_id;
         this.statusMessage = this.isMyTurn() ? 'Your turn! Find a pair!' : 'Opponent\'s turn...';
 
-        // Store the server's card order for multiplayer
+        // Store the server's card order and character names for multiplayer
         const cardOrder = message.game.card_order;
-        this.fetchSwapiCharacters(cardOrder);
+        const characterNames = message.game.character_names;
+
+        // Use server-provided characters in multiplayer mode
+        if (characterNames && characterNames.length > 0) {
+          this.swapiCharacters = characterNames;
+          this.cards = this.createShuffledCards(cardOrder);
+          this.isLoading = false;
+        } else {
+          // Fallback to fetching if server didn't provide characters
+          this.fetchSwapiCharacters(cardOrder);
+        }
         break;
 
       case 'move':
@@ -468,8 +478,8 @@ export class MemoryGameComponent implements OnInit, OnDestroy {
             ? '🎉 You won!'
             : `${winner.name} won!`;
 
-          // Submit score to server
-          // this.submitScore(winner.id, winner.score);
+          // Submit scores to leaderboard for multiplayer
+          this.submitMultiplayerScoresToLeaderboard(message.game);
         }
         break;
 
@@ -507,17 +517,24 @@ export class MemoryGameComponent implements OnInit, OnDestroy {
   private fetchSwapiCharacters(cardOrder?: number[]): void {
     const needed = (this.gridSize * this.gridSize) / 2;
     let characters: string[] = [];
-    let page = 1;
 
-    const fetchPage = () => {
+    // Fetch multiple pages to get a larger pool of characters
+    const maxPages = 9; // SWAPI has 9 pages of people, ~82 total characters
+    let pagesLoaded = 0;
+
+    const fetchPage = (page: number) => {
       this.http.get<any>(`https://swapi.dev/api/people/?page=${page}`).subscribe({
         next: (data) => {
           characters = characters.concat(data.results.map((c: any) => c.name));
-          if (characters.length < needed && data.next) {
-            page++;
-            fetchPage();
+          pagesLoaded++;
+
+          // Continue fetching if we have more pages and haven't reached max
+          if (data.next && pagesLoaded < maxPages) {
+            fetchPage(page + 1);
           } else {
-            this.swapiCharacters = characters.slice(0, needed);
+            // Once we have all characters, randomly select the needed amount
+            const randomizedCharacters = this.getRandomCharacters(characters, needed);
+            this.swapiCharacters = randomizedCharacters;
             this.cards = this.createShuffledCards(cardOrder);
             this.isLoading = false;
           }
@@ -529,7 +546,21 @@ export class MemoryGameComponent implements OnInit, OnDestroy {
       });
     };
 
-    fetchPage();
+    fetchPage(1);
+  }
+
+  private getRandomCharacters(allCharacters: string[], count: number): string[] {
+    // Create a copy to avoid modifying the original array
+    const shuffled = [...allCharacters];
+
+    // Fisher-Yates shuffle algorithm
+    for (let i = shuffled.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+    }
+
+    // Return the first 'count' items from the shuffled array
+    return shuffled.slice(0, count);
   }
 
   private createShuffledCards(cardOrder?: number[]): Card[] {
@@ -701,7 +732,25 @@ export class MemoryGameComponent implements OnInit, OnDestroy {
       score: this.matchesFound,
       tries: this.tries,
       grid_size: this.gridSize,
-      game_mode: this.isMultiplayer ? 'multiplayer' : 'single'
+      game_mode: 'single'
     });
+  }
+
+  private async submitMultiplayerScoresToLeaderboard(gameData: any): Promise<void> {
+    // Only submit the current player's own score to avoid duplicates
+    // (each client will submit their own score)
+    const currentPlayer = gameData.players.find((p: any) => p.id === this.playerId);
+
+    // Only submit if the player has a score greater than 0 (actually found matches)
+    if (currentPlayer && currentPlayer.score > 0) {
+      this.wsService.send({
+        action: 'game_complete',
+        player_name: currentPlayer.name,
+        score: currentPlayer.score,
+        tries: gameData.tries || 0,
+        grid_size: this.gridSize,
+        game_mode: 'multiplayer'
+      });
+    }
   }
 }
