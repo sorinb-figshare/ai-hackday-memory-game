@@ -1,14 +1,22 @@
-import {Component, OnInit} from '@angular/core';
+import {Component, OnInit, OnDestroy} from '@angular/core';
 import {CommonModule} from '@angular/common';
 import {HttpClient, HttpClientModule} from '@angular/common/http';
 import { InitialScreenComponent } from './initial-screen.component';
+import { WebSocketService } from '../services/websocket.service';
+import { Subscription } from 'rxjs';
 
 // Define the Card structure
 interface Card {
-  id: number; // Unique identifier for the card's position
-  content: string; // The character name (e.g., 'Luke Skywalker')
+  id: number;
+  content: string;
   isFlipped: boolean;
   isMatched: boolean;
+}
+
+interface Player {
+  id: string;
+  name: string;
+  score: number;
 }
 
 @Component({
@@ -23,15 +31,31 @@ interface Card {
       *ngIf="showInitialScreen"
       (gameStart)="onGameStart($event)">
     </app-initial-screen>
-    <div *ngIf="!showInitialScreen" class="game-container">
+
+    <div *ngIf="isWaitingForOpponent" class="waiting-container">
+      <h2>⏳ Waiting for opponent...</h2>
+      <p>Grid Size: {{ gridSize }} x {{ gridSize }}</p>
+      <p>Share this game with a friend!</p>
+    </div>
+
+    <div *ngIf="!showInitialScreen && !isWaitingForOpponent" class="game-container">
       <p class="status">{{ statusMessage }}</p>
 
       <div class="scoreboard">
-        <span>Player: {{ playerName }}</span> |
-        <span>Score: {{ matchesFound }}</span> |
-        <span>Tries: {{ tries }}</span> |
-        <span>Remaining Pairs: {{ remainingPairs }}</span> |
-        <span>Guessed Pairs: {{ guessedPairs }}</span>
+        <div *ngIf="isMultiplayer" class="players-info">
+          <div *ngFor="let player of players" class="player-card"
+               [class.active]="player.id === currentTurnPlayerId">
+            <span class="player-name">{{ player.name }}</span>
+            <span class="player-score">Score: {{ player.score }}</span>
+            <span *ngIf="player.id === currentTurnPlayerId" class="turn-indicator">👈 Your Turn</span>
+          </div>
+        </div>
+        <div *ngIf="!isMultiplayer" class="single-player-info">
+          <span>Player: {{ playerName }}</span> |
+          <span>Score: {{ matchesFound }}</span> |
+          <span>Tries: {{ tries }}</span> |
+          <span>Remaining Pairs: {{ remainingPairs }}</span>
+        </div>
       </div>
 
       <div class="grid" [style.grid-template-columns]="'repeat(' + gridSize + ', 1fr)'">
@@ -39,6 +63,7 @@ interface Card {
           *ngFor="let card of cards"
           class="card"
           [class.matched]="card.isMatched"
+          [class.disabled]="isMultiplayer && !isMyTurn()"
           (click)="onCardClick(card)"
         >
           <div class="card-inner" [class.flipped]="card.isFlipped || card.isMatched">
@@ -50,7 +75,8 @@ interface Card {
         </div>
       </div>
 
-      <button (click)="startGame()" *ngIf="isGameOver || !cards.length">Start New Game</button>
+      <button (click)="resetGame()" *ngIf="isGameOver">Play Again</button>
+      <button (click)="resetGame()" *ngIf="!isMultiplayer && !cards.length">Start New Game</button>
     </div>
   `,
   styles: [`
@@ -59,20 +85,75 @@ interface Card {
       margin: 0 auto;
       text-align: center;
       font-family: Arial, sans-serif;
+      padding: 10px;
+    }
+
+    .waiting-container {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      min-height: 400px;
+      gap: 20px;
+    }
+
+    .waiting-container h2 {
+      color: gold;
+      font-size: 2em;
     }
 
     .status {
-      margin-bottom: 20px;
+      margin-bottom: 10px;
       font-weight: bold;
+      font-size: 1.1em;
     }
 
     .scoreboard {
-      margin-bottom: 16px;
-      font-size: 16px;
+      margin-bottom: 10px;
+      font-size: 14px;
       color: #fff;
       background: #222;
       padding: 8px;
       border-radius: 6px;
+    }
+
+    .players-info {
+      display: flex;
+      justify-content: center;
+      gap: 30px;
+    }
+
+    .player-card {
+      display: flex;
+      flex-direction: column;
+      gap: 5px;
+      padding: 10px 20px;
+      border-radius: 6px;
+      background: #333;
+      transition: all 0.3s;
+    }
+
+    .player-card.active {
+      background: #444;
+      border: 2px solid gold;
+      transform: scale(1.05);
+    }
+
+    .player-name {
+      font-weight: bold;
+      font-size: 1.1em;
+    }
+
+    .player-score {
+      color: gold;
+    }
+
+    .turn-indicator {
+      color: #4CAF50;
+      font-weight: bold;
+    }
+
+    .single-player-info {
       display: flex;
       justify-content: center;
       gap: 20px;
@@ -80,16 +161,18 @@ interface Card {
 
     .grid {
       display: grid;
-      gap: 10px;
+      gap: 8px;
       perspective: 1000px;
       width: 100%;
-      max-width: 1200px;
+      max-width: min(90vw, 800px);
       margin: 0 auto;
+      max-height: calc(100vh - 250px);
     }
 
     .card {
       width: 100%;
-      aspect-ratio: 275 / 384;
+      aspect-ratio: 3 / 4;
+      max-height: calc((100vh - 250px) / var(--grid-size) - 8px);
       background-color: transparent;
       border: 2px solid gold;
       border-radius: 8px;
@@ -97,8 +180,11 @@ interface Card {
       position: relative;
       box-sizing: border-box;
       overflow: hidden;
-      /* Remove fixed width/height */
-      /* aspect-ratio keeps the card shape */
+    }
+
+    .card.disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
     }
 
     .card-inner {
@@ -109,6 +195,7 @@ interface Card {
       transition: transform 0.6s;
       transform-style: preserve-3d;
     }
+
     .card-inner.flipped {
       transform: rotateY(180deg);
       pointer-events: none;
@@ -122,11 +209,13 @@ interface Card {
       display: flex;
       align-items: center;
       justify-content: center;
-      font-size: 14px;
+      font-size: 12px;
       font-weight: bold;
       border-radius: 6px;
-      padding: 0;
+      padding: 4px;
       box-sizing: border-box;
+      word-wrap: break-word;
+      overflow: hidden;
     }
 
     .card-back {
@@ -150,8 +239,8 @@ interface Card {
       background-color: white;
       color: black;
       transform: rotateY(180deg);
-      font-size: 1.2em;
-      padding: 10px;
+      font-size: clamp(10px, 1vw, 14px);
+      padding: 8px;
       box-sizing: border-box;
       display: flex;
       align-items: center;
@@ -159,20 +248,55 @@ interface Card {
       height: 100%;
       width: 100%;
       border-radius: 6px;
+      text-align: center;
+      line-height: 1.2;
     }
 
     .card.matched .card-front {
       background-color: #4CAF50;
       color: white;
     }
+
+    button {
+      margin-top: 15px;
+      padding: 10px 20px;
+      font-size: 1em;
+      cursor: pointer;
+      background-color: gold;
+      border: none;
+      border-radius: 6px;
+      font-weight: bold;
+    }
+
+    button:hover {
+      background-color: #ffd700;
+    }
+
+    /* Responsive adjustments for different grid sizes */
+    @media (max-height: 800px) {
+      .status {
+        margin-bottom: 5px;
+        font-size: 1em;
+      }
+
+      .scoreboard {
+        margin-bottom: 5px;
+        font-size: 12px;
+        padding: 6px;
+      }
+
+      .grid {
+        max-height: calc(100vh - 200px);
+      }
+    }
   `]
 })
-export class MemoryGameComponent implements OnInit {
+export class MemoryGameComponent implements OnInit, OnDestroy {
   // GAME STATE
-  gridSize = 6; // Default, updated from initial screen
+  gridSize = 6;
   cards: Card[] = [];
   flippedCards: Card[] = [];
-  isChecking = false; // Flag to prevent rapid clicking while cards are being checked
+  isChecking = false;
   matchesFound = 0;
   isGameOver = false;
   statusMessage = 'Click Start New Game to begin!';
@@ -181,36 +305,195 @@ export class MemoryGameComponent implements OnInit {
   // SWAPI Data
   swapiCharacters: string[] = [];
 
-  // Additional game metrics
+  // Single player metrics
   tries = 0;
   remainingPairs = 0;
-  guessedPairs = 0;
 
   // Initial screen state
   showInitialScreen = true;
   playerName = '';
 
-  constructor(private http: HttpClient) {}
+  // Multiplayer state
+  isMultiplayer = false;
+  playerId: string = '';
+  currentTurnPlayerId: string = '';
+  players: Player[] = [];
+  isWaitingForOpponent = false;
+  private wsSubscription?: Subscription;
 
-  ngOnInit() {
-    // Optionally start a game automatically if you wish
-    // this.startGame();
+  constructor(
+    private http: HttpClient,
+    private wsService: WebSocketService
+  ) {
+    this.playerId = this.generatePlayerId();
   }
 
-  // CORE LOGIC FUNCTIONS
+  ngOnInit() {}
 
-  startGame(): void {
+  ngOnDestroy() {
+    if (this.wsSubscription) {
+      this.wsSubscription.unsubscribe();
+    }
+    if (this.isMultiplayer) {
+      this.wsService.disconnect();
+    }
+  }
+
+  private generatePlayerId(): string {
+    return 'player_' + Math.random().toString(36).substr(2, 9);
+  }
+
+  async onGameStart(event: { playerName: string, gridSize: number, gameMode: string }) {
+    this.playerName = event.playerName;
+    this.gridSize = event.gridSize;
+    this.isMultiplayer = event.gameMode === 'multiplayer';
+    this.showInitialScreen = false;
+
+    if (this.isMultiplayer) {
+      await this.startMultiplayerGame();
+    } else {
+      this.startSinglePlayerGame();
+    }
+  }
+
+  // SINGLE PLAYER MODE
+  startSinglePlayerGame(): void {
     this.matchesFound = 0;
     this.isGameOver = false;
     this.statusMessage = 'May the Force be with you. Find the pairs!';
     this.isLoading = true;
     this.tries = 0;
-    this.guessedPairs = 0;
     this.remainingPairs = (this.gridSize * this.gridSize) / 2;
     this.fetchSwapiCharacters();
   }
 
-  private fetchSwapiCharacters(): void {
+  // MULTIPLAYER MODE
+  async startMultiplayerGame(): Promise<void> {
+    try {
+      await this.wsService.connect();
+      this.isWaitingForOpponent = true;
+      this.statusMessage = 'Connecting to game server...';
+
+      // Subscribe to WebSocket messages
+      this.wsSubscription = this.wsService.messages$.subscribe(message => {
+        this.handleWebSocketMessage(message);
+      });
+
+      // Join game
+      this.wsService.send({
+        action: 'join',
+        player_id: this.playerId,
+        player_name: this.playerName,
+        grid_size: this.gridSize
+      });
+
+    } catch (error) {
+      console.error('Failed to connect to game server:', error);
+      this.statusMessage = 'Failed to connect to server. Please try again.';
+      this.isWaitingForOpponent = false;
+    }
+  }
+
+  private handleWebSocketMessage(message: any): void {
+    console.log('Handling message:', message);
+
+    switch (message.type) {
+      case 'waiting':
+        this.isWaitingForOpponent = true;
+        this.statusMessage = 'Waiting for opponent to join...';
+        break;
+
+      case 'game_start':
+        this.isWaitingForOpponent = false;
+        this.players = message.game.players;
+        this.currentTurnPlayerId = message.game.current_turn_player_id;
+        this.statusMessage = this.isMyTurn() ? 'Your turn! Find a pair!' : 'Opponent\'s turn...';
+
+        // Store the server's card order for multiplayer
+        const cardOrder = message.game.card_order;
+        this.fetchSwapiCharacters(cardOrder);
+        break;
+
+      case 'move':
+        // Only update for opponent's moves, not our own
+        if (message.player_id !== this.playerId) {
+          const card = this.cards.find(c => c.id === message.card_id);
+          if (card && !card.isMatched) {
+            card.isFlipped = true;
+          }
+        }
+        break;
+
+      case 'match_found':
+        // Update scores and mark cards as matched
+        this.players = message.game.players;
+        const matchedCards = message.cards;
+
+        // Mark cards as matched for both players
+        matchedCards.forEach((cardId: number) => {
+          const card = this.cards.find(c => c.id === cardId);
+          if (card) {
+            card.isMatched = true;
+            card.isFlipped = true;
+          }
+        });
+
+        // Clear flipped cards tracking
+        this.flippedCards = [];
+        this.isChecking = false;
+
+        if (message.player_id === this.playerId) {
+          this.statusMessage = '🎉 You found a match!';
+        } else {
+          this.statusMessage = 'Opponent found a match!';
+        }
+
+        // Check if game is over
+        const totalPairs = (this.gridSize * this.gridSize) / 2;
+        const totalMatches = this.players.reduce((sum, p) => sum + p.score, 0);
+        if (totalMatches === totalPairs) {
+          this.isGameOver = true;
+          const winner = this.players.reduce((prev, curr) =>
+            curr.score > prev.score ? curr : prev
+          );
+          this.statusMessage = winner.id === this.playerId
+            ? '🎉 You won!'
+            : `${winner.name} won!`;
+        }
+        break;
+
+      case 'turn_change':
+        this.currentTurnPlayerId = message.current_turn_player_id;
+        this.players = message.game.players;
+        this.statusMessage = this.isMyTurn() ? 'Your turn!' : 'Opponent\'s turn...';
+
+        // Flip back ALL unmatched flipped cards (for both players)
+        this.cards.forEach(card => {
+          if (!card.isMatched && card.isFlipped) {
+            card.isFlipped = false;
+          }
+        });
+        this.flippedCards = [];
+        this.isChecking = false;
+        break;
+
+      case 'player_left':
+        this.statusMessage = 'Opponent left the game.';
+        this.isGameOver = true;
+        break;
+
+      case 'error':
+        this.statusMessage = message.message;
+        break;
+    }
+  }
+
+  isMyTurn(): boolean {
+    return this.currentTurnPlayerId === this.playerId;
+  }
+
+  // SHARED LOGIC
+  private fetchSwapiCharacters(cardOrder?: number[]): void {
     const needed = (this.gridSize * this.gridSize) / 2;
     let characters: string[] = [];
     let page = 1;
@@ -224,7 +507,7 @@ export class MemoryGameComponent implements OnInit {
             fetchPage();
           } else {
             this.swapiCharacters = characters.slice(0, needed);
-            this.cards = this.createShuffledCards();
+            this.cards = this.createShuffledCards(cardOrder);
             this.isLoading = false;
           }
         },
@@ -238,37 +521,67 @@ export class MemoryGameComponent implements OnInit {
     fetchPage();
   }
 
-  private createShuffledCards(): Card[] {
+  private createShuffledCards(cardOrder?: number[]): Card[] {
     const pairs: string[] = this.swapiCharacters;
     let allCards: Card[] = [];
 
-    // Create the pairs
-    for (let i = 0; i < pairs.length; i++) {
-      // Create two cards with the same content
-      allCards.push({id: allCards.length, content: pairs[i], isFlipped: false, isMatched: false});
-      allCards.push({id: allCards.length, content: pairs[i], isFlipped: false, isMatched: false});
-    }
+    if (cardOrder && this.isMultiplayer) {
+      // Use server's card order for multiplayer
+      for (let i = 0; i < cardOrder.length; i++) {
+        const characterIndex = cardOrder[i] - 1; // Server sends 1-indexed pairs
+        allCards.push({
+          id: i,
+          content: pairs[characterIndex],
+          isFlipped: false,
+          isMatched: false
+        });
+      }
+    } else {
+      // Single player - shuffle locally
+      for (let i = 0; i < pairs.length; i++) {
+        allCards.push({id: allCards.length, content: pairs[i], isFlipped: false, isMatched: false});
+        allCards.push({id: allCards.length, content: pairs[i], isFlipped: false, isMatched: false});
+      }
 
-    // Shuffle the cards (Fisher-Yates algorithm)
-    for (let i = allCards.length - 1; i > 0; i--) {
-      const j = Math.floor(Math.random() * (i + 1));
-      [allCards[i], allCards[j]] = [allCards[j], allCards[i]];
+      // Shuffle
+      for (let i = allCards.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [allCards[i], allCards[j]] = [allCards[j], allCards[i]];
+      }
     }
 
     return allCards;
   }
 
   onCardClick(card: Card): void {
-    if (this.isChecking || card.isFlipped || this.isGameOver) {
+    // Prevent clicks during checking or if card is already flipped/matched
+    if (this.isChecking || card.isFlipped || card.isMatched || this.isGameOver) {
+      return;
+    }
+
+    // In multiplayer, check if it's player's turn
+    if (this.isMultiplayer && !this.isMyTurn()) {
+      this.statusMessage = 'Wait for your turn!';
       return;
     }
 
     card.isFlipped = true;
     this.flippedCards.push(card);
 
-    if (this.flippedCards.length === 2) {
+    // Send move to server in multiplayer
+    if (this.isMultiplayer) {
+      this.wsService.send({
+        action: 'move',
+        card_id: card.id,
+        flip_count: this.flippedCards.length
+      });
+    }
+
+    if(this.flippedCards.length === 2) {
       this.isChecking = true;
-      this.tries++;
+      if (!this.isMultiplayer) {
+        this.tries++;
+      }
       this.checkForMatch();
     }
   }
@@ -278,29 +591,47 @@ export class MemoryGameComponent implements OnInit {
 
     if (card1.content === card2.content) {
       // Match found!
-      this.matchesFound++;
-      this.guessedPairs++;
-      this.remainingPairs--;
-      this.statusMessage = `Match Found! ${card1.content} is correct!`;
-
-      // Mark as matched and keep them flipped
       card1.isMatched = true;
       card2.isMatched = true;
 
-      this.flippedCards = []; // Clear for the next turn
-      this.isChecking = false;
-
-      this.checkWinState();
+      if (this.isMultiplayer) {
+        // Notify server of match
+        this.wsService.send({
+          action: 'match_found',
+          cards: [card1.id, card2.id]
+        });
+        // Don't clear flippedCards yet - wait for server response
+        this.isChecking = false;
+      } else {
+        // Single player
+        this.matchesFound++;
+        this.remainingPairs--;
+        this.statusMessage = `Match Found! ${card1.content} is correct!`;
+        this.flippedCards = [];
+        this.isChecking = false;
+        this.checkWinState();
+      }
 
     } else {
-      // No match, flip them back after a delay
+      // No match
       this.statusMessage = 'No match. Try again...';
-      setTimeout(() => {
-        card1.isFlipped = false;
-        card2.isFlipped = false;
-        this.flippedCards = []; // Clear for the next turn
-        this.isChecking = false;
-      }, 1000); // 1 second delay to see the cards
+
+      if (this.isMultiplayer) {
+        // In multiplayer, wait a bit then tell server to change turn
+        setTimeout(() => {
+          this.wsService.send({
+            action: 'next_turn'
+          });
+        }, 1000);
+      } else {
+        // Single player - flip back after delay
+        setTimeout(() => {
+          card1.isFlipped = false;
+          card2.isFlipped = false;
+          this.flippedCards = [];
+          this.isChecking = false;
+        }, 1000);
+      }
     }
   }
 
@@ -312,10 +643,21 @@ export class MemoryGameComponent implements OnInit {
     }
   }
 
-  onGameStart(event: { playerName: string, gridSize: number }) {
-    this.playerName = event.playerName;
-    this.gridSize = event.gridSize;
-    this.showInitialScreen = false;
-    this.startGame();
+  resetGame(): void {
+    if (this.isMultiplayer) {
+      this.wsService.disconnect();
+    }
+
+    this.showInitialScreen = true;
+    this.isWaitingForOpponent = false;
+    this.cards = [];
+    this.flippedCards = [];
+    this.isChecking = false;
+    this.matchesFound = 0;
+    this.isGameOver = false;
+    this.tries = 0;
+    this.remainingPairs = 0;
+    this.players = [];
+    this.currentTurnPlayerId = '';
   }
 }

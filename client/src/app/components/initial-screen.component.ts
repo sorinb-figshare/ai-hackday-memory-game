@@ -14,6 +14,13 @@ import {FormsModule} from '@angular/forms';
           <input type="text" [(ngModel)]="playerName" name="playerName" required/>
         </label>
         <label>
+          Game Mode:
+          <select [(ngModel)]="gameMode" name="gameMode">
+            <option value="single">Single Player</option>
+            <option value="multiplayer">Multiplayer</option>
+          </select>
+        </label>
+        <label>
           Grid Size:
           <select [(ngModel)]="gridSize" name="gridSize">
             <option *ngFor="let size of gridSizes" [value]="size">{{ size }} x {{ size }}</option>
@@ -24,7 +31,6 @@ import {FormsModule} from '@angular/forms';
     </div>
   `,
   styles: [`
-    // ...existing code...
     .initial-screen {
       display: flex;
       flex-direction: column;
@@ -43,10 +49,12 @@ import {FormsModule} from '@angular/forms';
 
     label {
       font-size: 1.1em;
+      display: flex;
+      align-items: center;
+      gap: 10px;
     }
 
     input, select {
-      margin-left: 10px;
       padding: 4px 8px;
       font-size: 1em;
     }
@@ -55,21 +63,31 @@ import {FormsModule} from '@angular/forms';
       padding: 8px 16px;
       font-size: 1em;
       cursor: pointer;
+      background-color: gold;
+      border: none;
+      border-radius: 4px;
+      font-weight: bold;
     }
 
-    // ...existing code...
+    button:hover {
+      background-color: #ffd700;
+    }
   `]
 })
 export class InitialScreenComponent {
-  @Output() gameStart = new EventEmitter<{ playerName: string, gridSize: number }>();
+  @Output() gameStart = new EventEmitter<{ playerName: string, gridSize: number, gameMode: string }>();
   playerName: string = '';
   gridSize: number = 6;
+  gameMode: string = 'single';
   gridSizes = [2, 4, 6, 8];
 
   startGame() {
     if (this.playerName && this.gridSize) {
-      this.gameStart.emit({playerName: this.playerName, gridSize: this.gridSize});
+      this.gameStart.emit({
+        playerName: this.playerName,
+        gridSize: this.gridSize,
+        gameMode: this.gameMode
+      });
     }
   }
 }
-
