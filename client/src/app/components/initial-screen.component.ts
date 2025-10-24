@@ -1,0 +1,75 @@
+import {Component, Output, EventEmitter} from '@angular/core';
+import {CommonModule} from '@angular/common';
+import {FormsModule} from '@angular/forms';
+
+@Component({
+  selector: 'app-initial-screen',
+  standalone: true,
+  imports: [CommonModule, FormsModule],
+  template: `
+    <div class="initial-screen">
+      <form (ngSubmit)="startGame()">
+        <label>
+          Player Name:
+          <input type="text" [(ngModel)]="playerName" name="playerName" required/>
+        </label>
+        <label>
+          Grid Size:
+          <select [(ngModel)]="gridSize" name="gridSize">
+            <option *ngFor="let size of gridSizes" [value]="size">{{ size }} x {{ size }}</option>
+          </select>
+        </label>
+        <button type="submit">Start Game</button>
+      </form>
+    </div>
+  `,
+  styles: [`
+    // ...existing code...
+    .initial-screen {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      min-height: 400px;
+      gap: 20px;
+    }
+
+    form {
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+      align-items: flex-start;
+    }
+
+    label {
+      font-size: 1.1em;
+    }
+
+    input, select {
+      margin-left: 10px;
+      padding: 4px 8px;
+      font-size: 1em;
+    }
+
+    button {
+      padding: 8px 16px;
+      font-size: 1em;
+      cursor: pointer;
+    }
+
+    // ...existing code...
+  `]
+})
+export class InitialScreenComponent {
+  @Output() gameStart = new EventEmitter<{ playerName: string, gridSize: number }>();
+  playerName: string = '';
+  gridSize: number = 6;
+  gridSizes = [2, 4, 6, 8];
+
+  startGame() {
+    if (this.playerName && this.gridSize) {
+      this.gameStart.emit({playerName: this.playerName, gridSize: this.gridSize});
+    }
+  }
+}
+
