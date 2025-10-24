@@ -1,15 +1,35 @@
 import asyncio
 import websockets
 import json
-from typing import Dict, Set, Optional
+from typing import Dict, Set, Optional, List
 from dataclasses import dataclass, asdict
 from enum import Enum
 import random
+from datetime import datetime
 
 class GameState(Enum):
     WAITING = "waiting"
     PLAYING = "playing"
     FINISHED = "finished"
+
+@dataclass
+class LeaderboardEntry:
+    player_name: str
+    score: int
+    tries: int
+    grid_size: int
+    game_mode: str
+    timestamp: str
+
+    def to_dict(self):
+        return {
+            "player_name": self.player_name,
+            "score": self.score,
+            "tries": self.tries,
+            "grid_size": self.grid_size,
+            "game_mode": self.game_mode,
+            "timestamp": self.timestamp
+        }
 
 @dataclass
 class Player:
@@ -33,6 +53,7 @@ class Game:
     current_turn_player_id: Optional[str] = None
     grid_size: int = 6
     card_order: Optional[list] = None
+    tries: int = 0  # Track total tries in the game
 
     def to_dict(self):
         return {
@@ -41,7 +62,8 @@ class Game:
             "state": self.state.value,
             "current_turn_player_id": self.current_turn_player_id,
             "grid_size": self.grid_size,
-            "card_order": self.card_order
+            "card_order": self.card_order,
+            "tries": self.tries
         }
 
     def generate_card_order(self):
@@ -56,6 +78,7 @@ class GameServer:
         self.games: Dict[str, Game] = {}
         self.player_to_game: Dict[str, str] = {}  # player_id -> game_id
         self.waiting_players: Set[str] = set()
+        self.leaderboard: List[LeaderboardEntry] = []  # In-memory leaderboard
 
     async def handle_client(self, websocket: websockets.WebSocketServerProtocol):
         player_id = None
@@ -79,6 +102,12 @@ class GameServer:
 
                 elif action == "next_turn":
                     await self.handle_next_turn(player_id)
+
+                elif action == "game_complete":
+                    await self.handle_game_complete(player_id, data)
+
+                elif action == "get_leaderboard":
+                    await self.handle_get_leaderboard(websocket, data)
 
                 elif action == "leave":
                     await self.handle_leave(player_id)
@@ -190,6 +219,9 @@ class GameServer:
 
         game = self.games[game_id]
 
+        # Increment tries counter
+        game.tries += 1
+
         # Switch to next player
         player_ids = list(game.players.keys())
         current_index = player_ids.index(game.current_turn_player_id)
@@ -202,6 +234,57 @@ class GameServer:
             "current_turn_player_id": game.current_turn_player_id,
             "game": game.to_dict()
         })
+
+    async def handle_game_complete(self, player_id: str, data: Dict):
+        """Handle game completion and update leaderboard"""
+        player_name = data.get("player_name")
+        score = data.get("score")
+        tries = data.get("tries")
+        grid_size = data.get("grid_size")
+        game_mode = data.get("game_mode", "single")
+
+        # Create leaderboard entry
+        entry = LeaderboardEntry(
+            player_name=player_name,
+            score=score,
+            tries=tries,
+            grid_size=grid_size,
+            game_mode=game_mode,
+            timestamp=datetime.now().isoformat()
+        )
+
+        self.leaderboard.append(entry)
+
+        # Keep only top 100 entries
+        if len(self.leaderboard) > 100:
+            # Sort by score (desc), then by tries (asc)
+            self.leaderboard.sort(key=lambda x: (-x.score, x.tries))
+            self.leaderboard = self.leaderboard[:100]
+
+        print(f"📊 Leaderboard updated: {player_name} - Score: {score}, Tries: {tries}")
+
+    async def handle_get_leaderboard(self, websocket: websockets.WebSocketServerProtocol, data: Dict):
+        """Send leaderboard data to client"""
+        grid_size_filter = data.get("grid_size")
+        game_mode_filter = data.get("game_mode")
+
+        # Filter leaderboard
+        filtered = self.leaderboard
+        if grid_size_filter:
+            filtered = [e for e in filtered if e.grid_size == int(grid_size_filter)]
+        if game_mode_filter:
+            filtered = [e for e in filtered if e.game_mode == game_mode_filter]
+
+        # Sort by score (desc), then by tries (asc)
+        filtered.sort(key=lambda x: (-x.score, x.tries))
+
+        # Take top 10
+        top_entries = filtered[:10]
+
+        await websocket.send(json.dumps({
+            "type": "leaderboard",
+            "entries": [e.to_dict() for e in top_entries]
+        }))
 
     async def handle_leave(self, player_id: str):
         await self.handle_disconnect(player_id)

@@ -2,6 +2,7 @@ import {Component, OnInit, OnDestroy} from '@angular/core';
 import {CommonModule} from '@angular/common';
 import {HttpClient, HttpClientModule} from '@angular/common/http';
 import { InitialScreenComponent } from './initial-screen.component';
+import { LeaderboardComponent } from './leaderboard.component';
 import { WebSocketService } from '../services/websocket.service';
 import { Subscription } from 'rxjs';
 
@@ -24,13 +25,17 @@ interface Player {
   imports: [
     CommonModule,
     HttpClientModule,
-    InitialScreenComponent
+    InitialScreenComponent,
+    LeaderboardComponent
   ],
   template: `
     <app-initial-screen
-      *ngIf="showInitialScreen"
-      (gameStart)="onGameStart($event)">
+      *ngIf="showInitialScreen && !showLeaderboard"
+      (gameStart)="onGameStart($event)"
+      (leaderboardRequested)="onLeaderboardRequested()">
     </app-initial-screen>
+
+    <app-leaderboard *ngIf="showLeaderboard" (closeRequested)="onLeaderboardClosed()"></app-leaderboard>
 
     <div *ngIf="isWaitingForOpponent" class="waiting-container">
       <h2>⏳ Waiting for opponent...</h2>
@@ -38,7 +43,7 @@ interface Player {
       <p>Share this game with a friend!</p>
     </div>
 
-    <div *ngIf="!showInitialScreen && !isWaitingForOpponent" class="game-container">
+    <div *ngIf="!showInitialScreen && !isWaitingForOpponent && !showLeaderboard" class="game-container">
       <p class="status">{{ statusMessage }}</p>
 
       <div class="scoreboard">
@@ -321,6 +326,9 @@ export class MemoryGameComponent implements OnInit, OnDestroy {
   isWaitingForOpponent = false;
   private wsSubscription?: Subscription;
 
+  // Leaderboard state
+  showLeaderboard = false;
+
   constructor(
     private http: HttpClient,
     private wsService: WebSocketService
@@ -459,6 +467,9 @@ export class MemoryGameComponent implements OnInit, OnDestroy {
           this.statusMessage = winner.id === this.playerId
             ? '🎉 You won!'
             : `${winner.name} won!`;
+
+          // Submit score to server
+          // this.submitScore(winner.id, winner.score);
         }
         break;
 
@@ -640,6 +651,11 @@ export class MemoryGameComponent implements OnInit, OnDestroy {
     if (this.matchesFound === totalPairs) {
       this.isGameOver = true;
       this.statusMessage = '🎉 Congratulations! You have mastered the Force!';
+
+      // Submit score to leaderboard for single player
+      if (!this.isMultiplayer) {
+        this.submitScoreToLeaderboard();
+      }
     }
   }
 
@@ -649,6 +665,7 @@ export class MemoryGameComponent implements OnInit, OnDestroy {
     }
 
     this.showInitialScreen = true;
+    this.showLeaderboard = false;
     this.isWaitingForOpponent = false;
     this.cards = [];
     this.flippedCards = [];
@@ -659,5 +676,32 @@ export class MemoryGameComponent implements OnInit, OnDestroy {
     this.remainingPairs = 0;
     this.players = [];
     this.currentTurnPlayerId = '';
+  }
+
+  // LEADERBOARD LOGIC
+  onLeaderboardRequested(): void {
+    this.showLeaderboard = true;
+    this.showInitialScreen = false;
+  }
+
+  onLeaderboardClosed(): void {
+    this.showLeaderboard = false;
+    this.showInitialScreen = false;
+    this.resetGame();
+  }
+
+  private async submitScoreToLeaderboard(): Promise<void> {
+    if (!this.wsService.isConnected()) {
+      await this.wsService.connect();
+    }
+
+    this.wsService.send({
+      action: 'game_complete',
+      player_name: this.playerName,
+      score: this.matchesFound,
+      tries: this.tries,
+      grid_size: this.gridSize,
+      game_mode: this.isMultiplayer ? 'multiplayer' : 'single'
+    });
   }
 }

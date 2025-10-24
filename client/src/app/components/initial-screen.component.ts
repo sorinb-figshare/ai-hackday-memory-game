@@ -28,6 +28,7 @@ import {FormsModule} from '@angular/forms';
         </label>
         <button type="submit">Start Game</button>
       </form>
+      <button class="leaderboard-btn" (click)="showLeaderboard()">🏆 View Leaderboard</button>
     </div>
   `,
   styles: [`
@@ -72,10 +73,21 @@ import {FormsModule} from '@angular/forms';
     button:hover {
       background-color: #ffd700;
     }
+
+    .leaderboard-btn {
+      background-color: #4CAF50;
+      padding: 10px 20px;
+      font-size: 1.1em;
+    }
+
+    .leaderboard-btn:hover {
+      background-color: #45a049;
+    }
   `]
 })
 export class InitialScreenComponent {
   @Output() gameStart = new EventEmitter<{ playerName: string, gridSize: number, gameMode: string }>();
+  @Output() leaderboardRequested = new EventEmitter<void>();
   playerName: string = '';
   gridSize: number = 6;
   gameMode: string = 'single';
@@ -89,5 +101,9 @@ export class InitialScreenComponent {
         gameMode: this.gameMode
       });
     }
+  }
+
+  showLeaderboard() {
+    this.leaderboardRequested.emit();
   }
 }
